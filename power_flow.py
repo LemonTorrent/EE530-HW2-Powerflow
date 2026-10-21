@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 """
 Python version of the Chapman "power_flow" Matlab script.
+Modified to support PQ, Constant Impedance (Z/LZ), and Constant Current (I/LI) load models.
 
 Enter into Bash Command Line:
-    python power_flow.py <input_filename>  (Use the given file that comes with the zip file packae)
+    python power_flow.py <input_filename>  (Use the given file that comes with the zip file package)
 
 Input file format (same as Chapman):
   SYSTEM name baseMVA tol
@@ -13,9 +13,10 @@ Input file format (same as Chapman):
 Notes:
  - Per-unit arithmetic is used the same as the original Matlab script.
  - The solver uses the same update rules:
-     * PV buses: Q updated each iteration and voltage magnitude kept fixed
-     * SL (slack) bus: voltage angle fixed at 0 and magnitude fixed
+    * PV buses: Q updated each iteration and voltage magnitude kept fixed
+    * SL (slack) bus: voltage angle fixed at 0 and magnitude fixed
  - Output mirrors the Matlab report: bus info, line flows, losses, alerts.
+
 """
 import sys
 import math
@@ -28,9 +29,7 @@ def read_system(OOEP_Initial):
     with open(OOEP_Initial, 'r') as f:
         for raw in f:
             data = raw.strip()
-            if data == '':
-                continue
-            if data.startswith('%'):
+            if data == '' or data.startswith('%'):
                 continue
             tokens = data.split()
             key = tokens[0].upper()
@@ -62,6 +61,8 @@ def read_system(OOEP_Initial):
                     'Vbus': Vbus_val,   # initial magnitude guess; solver will create complex values
                     'PG': Pgen,
                     'QG': Qgen,
+                    'PL_nominal': Pload,
+                    'QL_nominal': Qload,
                     'PL': Pload,
                     'QL': Qload,
                     'QC': Qcap,
@@ -121,7 +122,6 @@ def read_system(OOEP_Initial):
         if (b['PG'] != 0 or b['QG'] != 0) and (b['type'] not in ('SL','PV')):
             raise ValueError(f"Generator bus {idx+1} specified as type {b['type']}")
 
-    
     # i_line count approximate
     print("Input summary statistics:")
     print(f"{len(line) + len(bus) + 1:4d} lines in system file (approx)")
@@ -154,21 +154,12 @@ def solve_system(bus, ybus, system):
     n_bus = len(bus)
     base = system['baseMVA']
 
-    # Initialize P and Q (per unit)
-    for b in bus:
-        b['P'] = b['PG'] - b['PL']
-        b['Q'] = b['QG'] - b['QL'] + b['QC']
-
     # Initialize complex voltage vector Vbus
     Vbus = [0+0j]*n_bus
     for i, b in enumerate(bus):
         # initial guess: real value = magnitude (angle 0)
         mag = b['Vbus']
-        if b['type'] == 'SL':
-            # Slack bus: magnitude fixed, angle 0
-            Vbus[i] = complex(mag, 0.0)
-        else:
-            Vbus[i] = complex(mag, 0.0)
+        Vbus[i] = complex(mag, 0.0)
 
     acc_fac = 1.0
     eps = 1e-4
@@ -180,10 +171,32 @@ def solve_system(bus, ybus, system):
         V_old = Vbus.copy()
 
         for i in range(n_bus):
-            if bus[i]['type'] == 'SL':
+            btype = bus[i]['type'].upper()
+            if btype == 'SL':
                 continue  # skip slack
-            # If PV bus update Q estimate from current voltages
-            if bus[i]['type'] == 'PV':
+
+            # Dynamic load modeling based on bus voltage magnitude
+            v_mag = abs(Vbus[i])
+            if btype in ('LZ', 'Z'):
+                # Constant Impedance: P and Q proportional to |V|^2
+                bus[i]['PL'] = bus[i]['PL_nominal'] * (v_mag ** 2)
+                bus[i]['QL'] = bus[i]['QL_nominal'] * (v_mag ** 2)
+            elif btype in ('LI', 'I'):
+                # Constant Current: P and Q proportional to |V|
+                bus[i]['PL'] = bus[i]['PL_nominal'] * v_mag
+                bus[i]['QL'] = bus[i]['QL_nominal'] * v_mag
+            else:
+                # Constant Power (PQ or PV): P and Q constant
+                bus[i]['PL'] = bus[i]['PL_nominal']
+                bus[i]['QL'] = bus[i]['QL_nominal']
+
+            # Update net P and Q injections
+            bus[i]['P'] = bus[i]['PG'] - bus[i]['PL']
+            if btype != 'PV':
+                bus[i]['Q'] = bus[i]['QG'] - bus[i]['QL'] + bus[i]['QC']
+
+            # If PV bus, update Q estimate from current voltages
+            if btype == 'PV':
                 temp = 0+0j
                 for j in range(n_bus):
                     temp += ybus[i][j] * Vbus[j]
@@ -210,7 +223,7 @@ def solve_system(bus, ybus, system):
             Vbus[i] = V_old[i] + acc_fac * (Vnew - V_old[i])
 
             # For PV bus enforce magnitude constant
-            if bus[i]['type'] == 'PV':
+            if btype == 'PV':
                 mag_fixed = abs(V_old[i])
                 if abs(Vbus[i]) != 0:
                     Vbus[i] = Vbus[i] * (mag_fixed / abs(Vbus[i]))
@@ -249,8 +262,7 @@ def report_system(bus, line, system, ybus, n_iter):
     for i in range(n_bus):
         b = bus[i]
         mag, phase = r2p(b['Vbus'])
-        # If slack, recompute P and Q from ybus
-        if b['type'] == 'SL':
+        if b['type'].upper() == 'SL':
             temp = 0+0j
             for j in range(n_bus):
                 temp += ybus[i][j] * bus[j]['Vbus']
@@ -283,7 +295,7 @@ def report_system(bus, line, system, ybus, n_iter):
                     other = li['from']
                     other_name = li['from_name']
 
-                # current on branch as in Matlab: il = (V_i - V_other) * ybus[i][other]
+                # current on branch as in Matlab: il = (V_i - V_other) * ybus[i][other
                 il = (b['Vbus'] - bus[other]['Vbus']) * ybus[i][other]
                 pl = b['Vbus'] * il.conjugate()
                 P_flow = -pl.real * base
