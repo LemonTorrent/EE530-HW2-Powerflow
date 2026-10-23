@@ -1,0 +1,25 @@
+% File describing a five bus electric power system.  This version 
+% contains only PQ-type load buses.
+%
+% !!Don't use Tabs!!
+%
+% System data has the form:
+% SYSTEM    name       baseMVA    Voltage Tolerance
+SYSTEM  FiveBus_PQ    100            0.05
+%
+% Bus data has the form:
+%BUS name       type  volts  Pgen   Qgen   Pload  Qload  Qcap
+BUS  Alan       SL    0.98      0      0      0      0      0
+BUS  Betty      PV    1.00    210      50     0      0      0
+BUS  Clyde      PQ    1.00      0      0    110     85    150
+BUS  Doug       PQ    1.00      0      0    100     95     50 
+BUS  Eve        PQ    1.00      0      0    150    120      0
+%
+% Transmission line data has the form:
+%LINE    from        to      Rse    Xse    Gsh    Bsh    Rating(MVA)
+LINE     Alan        Betty   0.009  0.041  0.000  0.000    125
+LINE     Betty       Eve     0.006  0.037  0.000  0.000    250
+LINE     Alan        Doug    0.007  0.055  0.000  0.000    200
+LINE     Doug        Eve     0.006  0.045  0.000  0.000    125
+LINE     Doug        Clyde   0.011  0.061  0.000  0.000     80
+LINE     Clyde       Eve     0.010  0.051  0.000  0.000     75
