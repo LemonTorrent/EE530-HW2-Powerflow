@@ -10,6 +10,13 @@ Input file format (same as Chapman):
   BUS name type volts Pgen Qgen Pload Qload Qcap
   LINE from to Rse Xse Gsh Bsh Rating
 
+Supported bus types:
+  SL = slack bus
+  PV = generator bus with fixed voltage magnitude
+  PQ / LP = constant-power load bus
+  Z / LZ = constant-impedance load bus (P, Q vary with |V|^2)
+  I / LI = constant-current load bus (P, Q vary with |V|)
+
 Notes:
  - Per-unit arithmetic is used the same as the original Matlab script.
  - The solver uses the same update rules:
@@ -21,6 +28,17 @@ Notes:
 import sys
 import math
 import cmath
+
+def normalize_bus_type(btype):
+    """Normalize supported bus-type aliases used in the input files."""
+    btype = btype.upper()
+    if btype in ('PQ', 'LP'):
+        return 'PQ'
+    if btype in ('Z', 'LZ'):
+        return 'LZ'
+    if btype in ('I', 'LI'):
+        return 'LI'
+    return btype
 
 def read_system(OOEP_Initial):
     system = {}
@@ -40,7 +58,7 @@ def read_system(OOEP_Initial):
             elif key == 'BUS':
                 # BUS name type volts Pgen Qgen Pload Qload Qcap
                 name = tokens[1]
-                btype = tokens[2].upper()
+                btype = normalize_bus_type(tokens[2])
                 # If Vbus given as two values (mag,angle) handle; otherwise single magnitude (angle=0)
                 if len(tokens) >= 4:
                     Vbus_val = float(tokens[3])
@@ -119,7 +137,8 @@ def read_system(OOEP_Initial):
 
     # Check generator buses types
     for idx, b in enumerate(bus):
-        if (b['PG'] != 0 or b['QG'] != 0) and (b['type'] not in ('SL','PV')):
+        btype = normalize_bus_type(b['type'])
+        if (b['PG'] != 0 or b['QG'] != 0) and (btype not in ('SL','PV')):
             raise ValueError(f"Generator bus {idx+1} specified as type {b['type']}")
 
     # i_line count approximate
@@ -171,22 +190,22 @@ def solve_system(bus, ybus, system):
         V_old = Vbus.copy()
 
         for i in range(n_bus):
-            btype = bus[i]['type'].upper()
+            btype = normalize_bus_type(bus[i]['type'])
             if btype == 'SL':
                 continue  # skip slack
 
             # Dynamic load modeling based on bus voltage magnitude
             v_mag = abs(Vbus[i])
-            if btype in ('LZ', 'Z'):
+            if btype == 'LZ':
                 # Constant Impedance: P and Q proportional to |V|^2
                 bus[i]['PL'] = bus[i]['PL_nominal'] * (v_mag ** 2)
                 bus[i]['QL'] = bus[i]['QL_nominal'] * (v_mag ** 2)
-            elif btype in ('LI', 'I'):
+            elif btype == 'LI':
                 # Constant Current: P and Q proportional to |V|
                 bus[i]['PL'] = bus[i]['PL_nominal'] * v_mag
                 bus[i]['QL'] = bus[i]['QL_nominal'] * v_mag
             else:
-                # Constant Power (PQ or PV): P and Q constant
+                # Constant Power (PQ / LP or PV): P and Q constant
                 bus[i]['PL'] = bus[i]['PL_nominal']
                 bus[i]['QL'] = bus[i]['QL_nominal']
 
